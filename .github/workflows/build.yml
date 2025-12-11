@@ -13,19 +13,19 @@ on:
 
 jobs:
   build:
-    name: ${{ matrix.version }}, ${{ matrix.architecture.name }}
+    name: ${{ matrix.version.name }}, ${{ matrix.architecture.name }}
     runs-on: ubuntu-latest
-    container:
-      image: alpine:edge
-      options: --privileged --device=/dev/kvm
     strategy:
         matrix:
           version:
-            - r1beta5
+            - name: 'r1beta5'
+              uname_version: hrev57937
 
           architecture:
             - name: x86-64
-              qemu: x86_64
+              uname: x86_64
+              qemu: x86
+              qemu_executable: x86_64
 
     steps:
       - name: Clone Repository
@@ -34,10 +34,18 @@ jobs:
           persist-credentials: false
 
       - name: Install Dependencies
-        run: apk add --no-cache qemu-img "qemu-system-${{ matrix.architecture.qemu }}"
+        run: |
+          sudo apt update && \
+          sudo apt install -y \
+          fdisk \
+          dosfstools \
+          rsync \
+          curl \
+          python3 \
+          qemu-system-${{ matrix.architecture.qemu }}
 
       - name: Print QEMU version
-        run: '"qemu-system-${{ matrix.architecture.qemu }}" --version'
+        run: '"qemu-system-${{ matrix.architecture.qemu_executable || matrix.architecture.qemu }}" --version'
 
       - uses: hashicorp/setup-packer@v3
         with:
@@ -51,9 +59,48 @@ jobs:
       - name: Build Image
         run: |
           PACKER_LOG=1 ./build.sh \
-            '${{ matrix.version }}' \
+            '${{ matrix.version.name }}' \
             '${{ matrix.architecture.name }}' \
             -var 'headless=true'
+
+      - name: Start Local HTTP Server
+        run: python3 -m http.server 8080 --directory output &
+
+      - name: Create File
+        run: echo 'host to guest' > host_to_guest.txt
+
+      - name: Test Image
+        uses: cross-platform-actions/action@master
+        with:
+          operating_system: haiku
+          architecture: ${{ matrix.architecture.name }}
+          version: '${{ matrix.version.name }}'
+          image_url: http://localhost:8080/haiku-${{ matrix.version.name }}-${{ matrix.architecture.name }}.qcow2
+          shutdown_vm: false
+          shell: bash
+          run: |
+            set -x
+            uname -a
+            uname -s
+            uname -r
+            uname -v
+            uname -m
+            uname -p
+            pwd
+            echo $SHELL
+            whoami
+            hostname
+            ls -lah
+            env | sort
+            [ "`uname -s`" = 'Haiku' ]
+            [ "`uname -r`" = '${{ matrix.version.uname_release || matrix.version.name }}' ] || uname -v | grep -q '${{ matrix.version.uname_version }}'
+            [ "`uname -m`" = '${{ matrix.architecture.uname || matrix.architecture.name }}' ] || [ "`uname -p`" = '${{ matrix.architecture.uname || matrix.architecture.name }}' ]
+            [ "`pwd`" = '/boot/home/home/runner/work/haiku-builder/haiku-builder' ]
+            cat host_to_guest.txt | grep -q 'host to guest'
+            echo 'guest to host' > guest_to_host.txt
+
+      - name: Verify File Synchronization
+        run: cat guest_to_host.txt | grep -q 'guest to host'
 
       - name: Extract Version
         id: version
