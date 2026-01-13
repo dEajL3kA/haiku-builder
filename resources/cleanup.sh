@@ -7,4 +7,4 @@ cleanup() {
   rm -rf /tmp/*
 }
 
-cleanup
+#cleanup
